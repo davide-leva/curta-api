@@ -1,0 +1,23 @@
+{
+  "name": "api",
+  "version": "1.0.0",
+  "description": "",
+  "main": "database.js",
+  "scripts": {
+    "run": "node server"
+  },
+  "author": "Davide Leva",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "express-winston": "^4.2.0",
+    "fs": "^0.0.1-security",
+    "fs-extra": "^11.1.1",
+    "nedb": "^1.8.0",
+    "pdfkit": "^0.13.0",
+    "qrcode-terminal": "^0.12.0",
+    "readline": "^1.3.0",
+    "winston": "^3.10.0",
+    "ws": "^8.13.0"
+  }
+}
