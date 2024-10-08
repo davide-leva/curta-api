@@ -1,4 +1,4 @@
-const { mkdirSync } = require('fs')
+const { mkdirSync, truncateSync } = require('fs')
 const { ensureFile } = require('fs-extra');
 const Datastore = require('nedb');
 
@@ -14,6 +14,14 @@ const DB = {
     'main:bank': new Datastore({
         filename: './data/main/bank.db',
         autoload: true
+    }),
+    'main:config': new Datastore({
+        filename: './data/main/config.db',
+        autoload: true,
+    }),
+    'main:backups': new Datastore({
+        filename: './data/main/backups.db',
+        autoload: true,
     }),
     'product:products': new Datastore({
         filename: './data/products/prices.db',
@@ -32,7 +40,6 @@ const Collections = {
     shifts: '/shifts.db',
 };
 
-
 const _loadDBs = () => DB['main:parties'].find({}, (err, parties) => {
     for (var pid in parties) {
         let party = parties[pid].tag;
@@ -47,7 +54,7 @@ const _loadDBs = () => DB['main:parties'].find({}, (err, parties) => {
 
 function _find(list, id) {
     for (let i in list) {
-        if(list[i]['_id'] == id) return list[i];
+        if (list[i]['_id'] == id) return list[i];
     }
 }
 
@@ -61,7 +68,7 @@ exports.Data = class {
         _loadDBs();
     }
     static create(party, cb) {
-        DB['main:parties'].find({tag: party.tag}, (err, data) => {
+        DB['main:parties'].find({ tag: party.tag }, (err, data) => {
             if (err) cb(err);
 
             if (data.length != 0) {
@@ -69,19 +76,19 @@ exports.Data = class {
             } else {
                 this.insert('main:parties', party, (err, data, _) => {
                     if (err) cb(err);
-        
+
                     mkdirSync(`./data/${party.tag}/`);
                     ensureFile(`./data/${party.tag}/groups.db`);
                     ensureFile(`./data/${party.tag}/shifts.db`);
                     ensureFile(`./data/${party.tag}/shop.db`);
                     ensureFile(`./data/${party.tag}/transactions.db`);
-        
+
                     _loadDBs();
                 });
             }
         });
     }
-    
+
     static insert(db, data, cb) {
         if (db in DB) {
             DB[db].insert(data, (err, data) => {
@@ -130,9 +137,7 @@ exports.Data = class {
                         });
                     });
 
-                    DB['main:parties'].find({"tag": party}, (err3, prt) => {
-                        console.log();
-
+                    DB['main:parties'].find({ "tag": party }, (err3, prt) => {
                         cb((err1 || err2) || err3, {
                             info: {
                                 total: total,
@@ -143,7 +148,7 @@ exports.Data = class {
                             items: entries
                         }, version);
                     });
-                    
+
                 });
             })
         });
@@ -215,26 +220,26 @@ exports.Data = class {
     static getDocumentData(tag, cb) {
         DB['main:parties'].find({}, (err, data) => {
             if (err) cb(err);
-    
+
             const party = data.filter((p, _, __) => p.tag == tag)[0];
             const tables = [];
             const totals = [];
-        
+
             DB[tag + ':groups'].find({}, (err, data) => {
                 if (err) cb(err);
-    
+
                 data.forEach(group => {
                     group['notSelled'] = group['people']
                         .map(p => JSON.parse(p))
                         .map(p => p.hasPaid ? 0 : 1)
                         .reduce((prev, current, _) => prev + current, 0);
-                    
+
                     group['discount'] = group['people']
                         .map(p => JSON.parse(p))
                         .map(p => p.discount)
                         .reduce((prev, current, _) => prev + current, 0);
                 });
-            
+
                 totals.push(data
                     .map(g => {
                         return g['people'].map(p => JSON.parse(p))
@@ -244,7 +249,7 @@ exports.Data = class {
                     })
                     .map(g => g.reduce((prev, current, _) => prev + current, 0))
                     .reduce((prev, current, _) => prev + current, 0));
-            
+
                 var totalEntered = data
                     .map(g => {
                         return g['people'].map(p => JSON.parse(p))
@@ -255,35 +260,35 @@ exports.Data = class {
                     .map(g => g.reduce((prev, current, _) => prev + current, 0))
                     .reduce((prev, current, _) => prev + current, 0);
                 totals.push(totalEntered);
-            
+
                 var totalDiscount = data
                     .map(g => g.discount)
                     .reduce((prev, current, _) => prev + current, 0);
-            
+
                 tables.push(data.map(g => [g.title, g.numberOfPeople, g.notSelled, (g.numberOfPeople - g.notSelled) * 15 - g.discount]));
-            
+
                 DB[tag + ':shop'].find({}, (err, shopData) => {
                     if (err) cb(err, null);
-    
+
                     DB['product:products'].find({}, (err, productData) => {
                         if (err) cb(err);
-    
+
                         shopData.map(p => {
                             p['product'] = _find(productData, p['product']);
                             return p;
                         });
-            
+
                         var totalShop = shopData
                             .map(p => p.quantity * p.product.price)
                             .reduce((prev, current, _) => prev + current, 0);
-                
+
                         var tableShop = shopData.map(p => [p.quantity, p.product.shop + ' - ' + p.product.name, p.product.price, p.quantity * p.product.price]);
                         tableShop.sort((p1, p2) => p2[1][0].charCodeAt(0) - p1[1][0].charCodeAt(0));
                         tables.push(tableShop);
-                        
+
                         DB[tag + ':transactions'].find({}, (err, transactionsData) => {
                             if (err) cb(err);
-    
+
                             transactionsData = [
                                 ...transactionsData,
                                 {
@@ -304,24 +309,24 @@ exports.Data = class {
                             ].filter((t, _, __) => t.amount != 0)
                                 .sort((a, b) => _abs(b.amount) - _abs(a.amount))
                                 .sort((a, b) => (a.amount > 0 ? 0 : 1) - (b.amount > 0 ? 0 : 1));
-                    
+
                             var totalCredit = transactionsData
                                 .filter((t, _, __) => t.amount > 0)
                                 .map(t => t.amount)
                                 .reduce((p, c, _) => p + c, 0);
                             totals.push(totalCredit);
-                    
+
                             var totalDebit = transactionsData
                                 .filter((t, _, __) => t.amount < 0)
                                 .map(t => t.amount)
                                 .reduce((p, c, _) => p + c, 0);
                             totals.push(totalDebit);
-            
+
                             totals.push(totalCredit + totalDebit);
-                            
+
                             tables.push(transactionsData
                                 .map(t => [t.title, t.amount, t.description]));
-        
+
                             cb(null, {
                                 tables: tables,
                                 totals: totals,
@@ -342,7 +347,7 @@ exports.Data = class {
 
             DB[tag + ":groups"].find({}, (err, data) => {
                 if (err) cb(err);
-    
+
                 data.map(g => {
                     g['people'] = g['people'].map(p => {
                         p = JSON.parse(p);
@@ -350,22 +355,22 @@ exports.Data = class {
                         return p;
                     });
                 });
-            
+
                 var peoples = [];
                 for (let i in data) {
                     peoples = peoples.concat(data[i].people)
-            
+
                 }
 
                 const table = peoples
                     .map(p => [p.group, p.name, p.hasPaid ? 'ok' : '', p.hasEntered ? 'entrato' : '']);
-            
+
                 cb(null, {
                     party: party,
                     table: table
                 });
             });
         });
-        
+
     }
 }

@@ -1,6 +1,6 @@
-const { ExceptionHandler } = require('winston');
 const { WebSocketServer } = require('ws');
 const { DeviceRegister } = require('./deviceRegister');
+const { make_backup } = require('./backup');
 
 class _Event {
     constructor(data) {
@@ -10,50 +10,6 @@ class _Event {
         this.data = data['data'];
     }
 }
-
-/*class _Notifier {
-    constructor() {
-        this.cbs = new Array();
-    }
-
-    notify() {
-        this.cbs.forEach(cb => cb.call());
-    }
-
-    addListener(cb) {
-        this.cbs.push(cb);
-    }
-}
-
-class _DeviceRegister {
-    constructor() {
-        this._notifier = new _Notifier();
-        this.devices = [];
-    }
-
-    add(client) {
-        this.devices.push({
-            'id': client.id,
-            'operator': client.operator,
-            'place': client.place
-        });
-        this._notifier.notify();
-    }
-
-    remove(client, silent = false) {
-        this.devices = this.devices.filter((device) => device.id != client.id);
-        if (!silent) this._notifier.notify();
-    }
-
-    modify(client) {
-        this.remove(client, true);
-        this.add(client);
-    }
-
-    addListener(cb) {
-        this._notifier.addListener(cb);
-    }
-}*/
 
 class _MessageError extends Error { }
 
@@ -75,17 +31,36 @@ function _handleMessage(target, type, data, cb) {
 }
 
 function _send(client, data) {
+    const method = `WSS.${data.type}`;
+    const space = " ".repeat(16 - method.length);
+    console.log(`\x1b[33m${method}`, space, 'server    ', '->', data.to);
     client.send(JSON.stringify(data));
 }
 
+function _removeFromList(list, value) {
+    var i = 0;
+
+    while (i < list.length) {
+        if (list[i] == value) {
+            list.splice(i, 1);
+        } else {
+            ++i;
+        }
+
+    }
+    return list;
+}
+
 exports.Socket = class {
-    constructor() {
+    constructor(pingInterval) {
         this.server = new WebSocketServer({
             port: 6000
         });
 
-        this.register = new DeviceRegister();
+        this.pingInterval = pingInterval;
 
+        this.clients = [];
+        this.register = new DeviceRegister();
         this.register.addListener(() => this.server.clients
             .forEach(reciver => _send(reciver, {
                 'from': 'server',
@@ -95,6 +70,17 @@ exports.Socket = class {
                     'collection': 'devices'
                 }
             })));
+
+        setInterval(() => {
+            this.server.clients.forEach((client) => _send(client, {
+                'from': 'server',
+                'to': client.id,
+                'type': 'PING',
+                'data': {
+                    'interval': this.pingInterval,
+                }
+            }));
+        }, pingInterval * 1000);
 
         this.server.on('connection', (client, req) => {
             client.on('message', (data) => {
@@ -109,7 +95,9 @@ exports.Socket = class {
                         client.type = event.data.type;
 
                         if (this.register.isRegistered(client.id)) {
-                            this.register.connect(client.id);
+                            if (this.register.connect(client.id))
+                                this.clients.push(client);
+
                             _send(client, {
                                 'from': 'server',
                                 'to': client.id,
@@ -132,12 +120,12 @@ exports.Socket = class {
                     _handleMessage('server', 'AUTH', data, (event) => {
                         if (!this.register.isAdmin(event.from)) return;
 
-                        var p = this.register.authRegistration(
+                        const p = this.register.authRegistration(
                             event.data.regis, event.data.device,
                         );
 
-                        var key = p[0];
-                        var client = p[1];
+                        const key = p[0];
+                        const client = p[1];
 
                         _send(client, {
                             'from': 'server',
@@ -154,6 +142,29 @@ exports.Socket = class {
                             'type': 'HANDSHAKE',
                             'data': event.data.device
                         });
+                    });
+
+                    _handleMessage('server', 'LOGIN', data, (event) => {
+                        const p = this.register.authWeb(event.data.user, event.data.hash);
+                        if (!p) {
+                            _send(client, {
+                                'from': 'server',
+                                'to': 'web',
+                                'type': 'AUTH_FAIL',
+                                'data': {}
+                            });
+                        } else {
+                            _send(client, {
+                                'from': 'server',
+                                'to': p[1].id,
+                                'type': 'AUTH',
+                                'data': {
+                                    'key': p[0],
+                                    'device': p[1]
+                                }
+                            });
+                            client.id = p[1]['id'];
+                        }
                     });
 
                     _handleMessage('all', '*', data, (event) => {
@@ -177,12 +188,18 @@ exports.Socket = class {
                             }
                         });
                     });
+
+                    _handleMessage('server', 'BACKUP', data, async (event) => {
+                        await make_backup();
+                        this.update('main:backups', 'server');
+                    });
                 } catch (err) {
                     console.log(err);
                 }
             });
 
             client.on('close', (_, __) => {
+                _removeFromList(this.clients, client);
                 this.register.disconnect(client.id);
             });
         });
@@ -195,9 +212,33 @@ exports.Socket = class {
             }
         })
     }
+
+    delete(id, cb) {
+        this.register.remove(id, cb);
+        this.server.clients.forEach(client => {
+            if (client.id == id) {
+                client.close();
+            }
+        });
+    }
+
+    update(collection) {
+        this.server.clients.forEach(client => {
+            _send(client, {
+                'from': 'server',
+                'to': client.id,
+                'type': 'UPDATE',
+                'data': {
+                    'collection': collection
+                }
+            });
+        });
+    }
 }
 
 _log = (eventData) => {
     const event = JSON.parse(eventData);
-    console.log(`SOCKET.${event.type}`, `${event.from} -> ${event.to}`);
+    const method = `WSS.${event.type}`;
+    const space = " ".repeat(16 - method.length);
+    console.log(`\x1b[33m${method}`, space, event.from, '->', event.to);
 }
